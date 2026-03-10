@@ -1,6 +1,6 @@
 import { and, eq, gte, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { agents, approvals, companies, costEvents, issues } from "@paperclipai/db";
+import { agents, approvals, companies, costEvents, heartbeatRuns, issues } from "@paperclipai/db";
 import { notFound } from "../errors.js";
 
 export function dashboardService(db: Db) {
@@ -92,6 +92,26 @@ export function dashboardService(db: Db) {
           ? (monthSpendCents / company.budgetMonthlyCents) * 100
           : 0;
 
+      const weekStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      const [weeklyRunStats] = await db
+        .select({
+          subscriptionOutputTokens:
+            sql<number>`coalesce(sum(case when coalesce((${heartbeatRuns.usageJson} ->> 'billingType'), 'unknown') = 'subscription' then coalesce((${heartbeatRuns.usageJson} ->> 'outputTokens')::int, 0) else 0 end), 0)::int`,
+          subscriptionInputTokens:
+            sql<number>`coalesce(sum(case when coalesce((${heartbeatRuns.usageJson} ->> 'billingType'), 'unknown') = 'subscription' then coalesce((${heartbeatRuns.usageJson} ->> 'inputTokens')::int, 0) else 0 end), 0)::int`,
+          subscriptionRunCount:
+            sql<number>`coalesce(sum(case when coalesce((${heartbeatRuns.usageJson} ->> 'billingType'), 'unknown') = 'subscription' then 1 else 0 end), 0)::int`,
+          apiRunCount:
+            sql<number>`coalesce(sum(case when coalesce((${heartbeatRuns.usageJson} ->> 'billingType'), 'unknown') = 'api' then 1 else 0 end), 0)::int`,
+        })
+        .from(heartbeatRuns)
+        .where(
+          and(
+            eq(heartbeatRuns.companyId, companyId),
+            gte(heartbeatRuns.finishedAt, weekStart),
+          ),
+        );
+
       return {
         companyId,
         agents: {
@@ -105,6 +125,10 @@ export function dashboardService(db: Db) {
           monthSpendCents,
           monthBudgetCents: company.budgetMonthlyCents,
           monthUtilizationPercent: Number(utilization.toFixed(2)),
+          weekSubscriptionOutputTokens: Number(weeklyRunStats.subscriptionOutputTokens),
+          weekSubscriptionInputTokens: Number(weeklyRunStats.subscriptionInputTokens),
+          weekSubscriptionRunCount: Number(weeklyRunStats.subscriptionRunCount),
+          weekApiRunCount: Number(weeklyRunStats.apiRunCount),
         },
         pendingApprovals,
         staleTasks,

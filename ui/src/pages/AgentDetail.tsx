@@ -26,6 +26,12 @@ import { Identity } from "../components/Identity";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { ScrollToBottom } from "../components/ScrollToBottom";
 import { formatCents, formatDate, relativeTime, formatTokens } from "../lib/utils";
+import {
+  SUBSCRIPTION_PLANS,
+  DEFAULT_SUBSCRIPTION_PLAN,
+  formatSubscriptionUsage,
+  type SubscriptionPlan,
+} from "../lib/subscription-plans";
 import { cn } from "../lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -951,6 +957,33 @@ function ConfigSummary({
 
 /* ---- Costs Section (inline) ---- */
 
+function detectBillingType(runs: HeartbeatRun[]): "api" | "subscription" | "mixed" {
+  let hasApi = false;
+  let hasSub = false;
+  for (const run of runs) {
+    const u = run.usageJson as Record<string, unknown> | null;
+    if (!u) continue;
+    const bt = u.billingType as string | undefined;
+    if (bt === "api") hasApi = true;
+    else if (bt === "subscription") hasSub = true;
+  }
+  if (hasApi && hasSub) return "mixed";
+  if (hasSub) return "subscription";
+  return "api";
+}
+
+function weeklyOutputTokens(runs: HeartbeatRun[]): number {
+  const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  let total = 0;
+  for (const run of runs) {
+    if (new Date(run.createdAt).getTime() < weekAgo) continue;
+    const u = run.usageJson as Record<string, unknown> | null;
+    if (!u) continue;
+    total += Number(u.outputTokens ?? u.output_tokens ?? 0);
+  }
+  return total;
+}
+
 function CostsSection({
   runtimeState,
   runs,
@@ -958,6 +991,16 @@ function CostsSection({
   runtimeState?: AgentRuntimeState;
   runs: HeartbeatRun[];
 }) {
+  const [selectedPlan, setSelectedPlan] = useState<SubscriptionPlan>(DEFAULT_SUBSCRIPTION_PLAN);
+  const billingType = useMemo(() => detectBillingType(runs), [runs]);
+  const weeklyOutput = useMemo(() => weeklyOutputTokens(runs), [runs]);
+  const subscriptionUsage = useMemo(
+    () => formatSubscriptionUsage(weeklyOutput, selectedPlan),
+    [weeklyOutput, selectedPlan],
+  );
+
+  const isSubscription = billingType === "subscription" || billingType === "mixed";
+
   const runsWithCost = runs
     .filter((r) => {
       const u = r.usageJson as Record<string, unknown> | null;
@@ -968,7 +1011,7 @@ function CostsSection({
   return (
     <div className="space-y-4">
       {runtimeState && (
-        <div className="border border-border rounded-lg p-4">
+        <div className="border border-border rounded-lg p-4 space-y-3">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div>
               <span className="text-xs text-muted-foreground block">Input tokens</span>
@@ -983,10 +1026,57 @@ function CostsSection({
               <span className="text-lg font-semibold">{formatTokens(runtimeState.totalCachedInputTokens)}</span>
             </div>
             <div>
-              <span className="text-xs text-muted-foreground block">Total cost</span>
+              <span className="text-xs text-muted-foreground block">
+                {isSubscription ? "API-equivalent cost" : "Total cost"}
+              </span>
               <span className="text-lg font-semibold">{formatCents(runtimeState.totalCostCents)}</span>
+              {isSubscription && runtimeState.totalCostCents > 0 && (
+                <span className="text-xs text-muted-foreground block">
+                  (not actual spend)
+                </span>
+              )}
             </div>
           </div>
+          {isSubscription && (
+            <div className="border-t border-border pt-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-muted-foreground">Weekly usage vs subscription limit</span>
+                <select
+                  className="h-6 text-xs rounded border border-input bg-background px-1 text-foreground"
+                  value={selectedPlan.id}
+                  onChange={(e) => {
+                    const plan = SUBSCRIPTION_PLANS.find((p) => p.id === e.target.value);
+                    if (plan) setSelectedPlan(plan);
+                  }}
+                >
+                  {SUBSCRIPTION_PLANS.map((p) => (
+                    <option key={p.id} value={p.id}>{p.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
+                  <div
+                    className={cn(
+                      "h-full rounded-full transition-[width,background-color] duration-150",
+                      subscriptionUsage.percent > 90 ? "bg-red-400"
+                        : subscriptionUsage.percent > 70 ? "bg-yellow-400"
+                        : "bg-green-400",
+                    )}
+                    style={{ width: `${Math.min(100, subscriptionUsage.percent)}%` }}
+                  />
+                </div>
+                <span className="text-xs font-medium shrink-0">
+                  {subscriptionUsage.percent}%
+                </span>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {formatTokens(weeklyOutput)} output tokens this week
+                {" / "}
+                {formatTokens(selectedPlan.weeklyOutputTokens)} {selectedPlan.label} limit
+              </p>
+            </div>
+          )}
         </div>
       )}
       {runsWithCost.length > 0 && (
@@ -998,24 +1088,42 @@ function CostsSection({
                 <th className="text-left px-3 py-2 font-medium text-muted-foreground">Run</th>
                 <th className="text-right px-3 py-2 font-medium text-muted-foreground">Input</th>
                 <th className="text-right px-3 py-2 font-medium text-muted-foreground">Output</th>
-                <th className="text-right px-3 py-2 font-medium text-muted-foreground">Cost</th>
+                <th className="text-right px-3 py-2 font-medium text-muted-foreground">
+                  {isSubscription ? "Equiv. Cost" : "Cost"}
+                </th>
+                {isSubscription && (
+                  <th className="text-left px-3 py-2 font-medium text-muted-foreground">Billing</th>
+                )}
               </tr>
             </thead>
             <tbody>
               {runsWithCost.slice(0, 10).map((run) => {
                 const u = run.usageJson as Record<string, unknown>;
+                const bt = (u.billingType as string) ?? "api";
                 return (
                   <tr key={run.id} className="border-b border-border last:border-b-0">
                     <td className="px-3 py-2">{formatDate(run.createdAt)}</td>
                     <td className="px-3 py-2 font-mono">{run.id.slice(0, 8)}</td>
-                    <td className="px-3 py-2 text-right">{formatTokens(Number(u.input_tokens ?? 0))}</td>
-                    <td className="px-3 py-2 text-right">{formatTokens(Number(u.output_tokens ?? 0))}</td>
+                    <td className="px-3 py-2 text-right">{formatTokens(Number(u.input_tokens ?? u.inputTokens ?? 0))}</td>
+                    <td className="px-3 py-2 text-right">{formatTokens(Number(u.output_tokens ?? u.outputTokens ?? 0))}</td>
                     <td className="px-3 py-2 text-right">
-                      {(u.cost_usd || u.total_cost_usd)
-                        ? `$${Number(u.cost_usd ?? u.total_cost_usd ?? 0).toFixed(4)}`
+                      {(u.cost_usd || u.total_cost_usd || u.costUsd)
+                        ? `$${Number(u.cost_usd ?? u.total_cost_usd ?? u.costUsd ?? 0).toFixed(4)}`
                         : "-"
                       }
                     </td>
+                    {isSubscription && (
+                      <td className="px-3 py-2">
+                        <span className={cn(
+                          "inline-block text-[10px] px-1.5 py-0.5 rounded",
+                          bt === "subscription"
+                            ? "bg-blue-500/10 text-blue-400"
+                            : "bg-orange-500/10 text-orange-400",
+                        )}>
+                          {bt === "subscription" ? "sub" : "api"}
+                        </span>
+                      </td>
+                    )}
                   </tr>
                 );
               })}

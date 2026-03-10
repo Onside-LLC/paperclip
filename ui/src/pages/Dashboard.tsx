@@ -18,7 +18,8 @@ import { PriorityIcon } from "../components/PriorityIcon";
 import { ActivityRow } from "../components/ActivityRow";
 import { Identity } from "../components/Identity";
 import { timeAgo } from "../lib/timeAgo";
-import { cn, formatCents } from "../lib/utils";
+import { cn, formatCents, formatTokens } from "../lib/utils";
+import { DEFAULT_SUBSCRIPTION_PLAN, formatSubscriptionUsage } from "../lib/subscription-plans";
 import { Bot, CircleDot, DollarSign, ShieldCheck, LayoutDashboard } from "lucide-react";
 import { ActiveAgentsPanel } from "../components/ActiveAgentsPanel";
 import { ChartCard, RunActivityChart, PriorityChart, IssueStatusChart, SuccessRateChart } from "../components/ActivityCharts";
@@ -237,14 +238,26 @@ export function Dashboard() {
             />
             <MetricCard
               icon={DollarSign}
-              value={formatCents(data.costs.monthSpendCents)}
-              label="Month Spend"
+              value={
+                data.costs.weekSubscriptionRunCount > 0 && data.costs.weekApiRunCount === 0
+                  ? `${formatSubscriptionUsage(data.costs.weekSubscriptionOutputTokens, DEFAULT_SUBSCRIPTION_PLAN).percent}%`
+                  : formatCents(data.costs.monthSpendCents)
+              }
+              label={
+                data.costs.weekSubscriptionRunCount > 0 && data.costs.weekApiRunCount === 0
+                  ? "Weekly Sub Usage"
+                  : "Month Spend"
+              }
               to="/costs"
               description={
                 <span>
-                  {data.costs.monthBudgetCents > 0
-                    ? `${data.costs.monthUtilizationPercent}% of ${formatCents(data.costs.monthBudgetCents)} budget`
-                    : "Unlimited budget"}
+                  {data.costs.weekSubscriptionRunCount > 0 && data.costs.weekApiRunCount === 0
+                    ? `${formatTokens(data.costs.weekSubscriptionOutputTokens)} out tok this week`
+                    : data.costs.weekSubscriptionRunCount > 0
+                      ? `${formatCents(data.costs.monthSpendCents)} API + ${formatTokens(data.costs.weekSubscriptionOutputTokens)} sub tok`
+                      : data.costs.monthBudgetCents > 0
+                        ? `${data.costs.monthUtilizationPercent}% of ${formatCents(data.costs.monthBudgetCents)} budget`
+                        : "Unlimited budget"}
                 </span>
               }
             />
